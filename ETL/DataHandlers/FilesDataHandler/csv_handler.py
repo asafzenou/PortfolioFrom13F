@@ -1,8 +1,8 @@
 import csv
 from typing import List, Dict, Any
-from DAL.dal import AbstractDataHandler
 
-class CSVDataHandler(AbstractDataHandler):
+
+class CSVDataHandler():
     """Handler for CSV data operations"""
     def __init__(self, filepath: str):
         self.filepath = filepath

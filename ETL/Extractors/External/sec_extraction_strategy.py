@@ -13,21 +13,16 @@ class SECExtractionStrategy(ExtractionStrategy):
     """
     Extracts 13F filings from SEC dataset ZIPs.
     Downloads ZIP → extracts → parses XML files → returns combined records.
+
+    The ZIP contains ALL 13F filings for the date range across the entire SEC.
+    No CIK filtering needed — parse everything.
     """
 
     def __init__(
         self,
-        cik: str = None,
-        date_from: str = None,
-        date_to: str = None,
-        identity: str = None,
-        sec_zip_url: str = None,
+        sec_zip_url: str,
         output_dir: str = "13f_outputs",
     ):
-        self.cik = cik
-        self.date_from = date_from
-        self.date_to = date_to
-        self.identity = identity
         self.sec_zip_url = sec_zip_url
         self.output_dir = output_dir
         self.namespace = {"n1": "http://www.sec.gov/edgar/thirteenffiler"}
@@ -36,11 +31,20 @@ class SECExtractionStrategy(ExtractionStrategy):
         """Downloads SEC dataset ZIP with proper headers."""
         headers = {"User-Agent": "AsafZenou-Research/1.0"}
         print(f"Downloading from: {url}")
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, stream=True)
         response.raise_for_status()
 
+        total_size = int(response.headers.get("content-length", 0))
+        downloaded = 0
+
         with open(output_path, "wb") as f:
-            f.write(response.content)
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total_size:
+                    pct = (downloaded / total_size) * 100
+                    print(f"  {pct:.1f}% downloaded...")
+
         print(f"✓ Downloaded: {output_path}")
 
     def _extract_zip(self, zip_path: str, extract_to: str) -> None:
@@ -96,7 +100,9 @@ class SECExtractionStrategy(ExtractionStrategy):
         xml_files = glob.glob(f"{folder}/**/*.xml", recursive=True)
         print(f"Found {len(xml_files)} XML files to parse")
 
-        for xml_file in xml_files:
+        for i, xml_file in enumerate(xml_files, 1):
+            if i % 100 == 0:
+                print(f"  Parsed {i}/{len(xml_files)} files...")
             rows = self._parse_13f_xml(xml_file)
             all_rows.extend(rows)
 
@@ -105,7 +111,7 @@ class SECExtractionStrategy(ExtractionStrategy):
     def extract(self) -> List[Dict[str, Any]]:
         """
         Main extraction flow:
-        1. Download SEC ZIP
+        1. Download SEC ZIP (all 13F filings for date range)
         2. Extract to temp directory
         3. Parse all XML files
         4. Return combined records
@@ -113,7 +119,6 @@ class SECExtractionStrategy(ExtractionStrategy):
         if not self.sec_zip_url:
             raise ValueError("sec_zip_url is required for SEC ZIP extraction")
 
-        # Create temp directory for extraction
         temp_dir = tempfile.mkdtemp(prefix="sec_13f_")
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -134,7 +139,6 @@ class SECExtractionStrategy(ExtractionStrategy):
             return combined_rows
 
         finally:
-            # Cleanup temp directory
             import shutil
 
             if os.path.exists(temp_dir):

@@ -1,5 +1,5 @@
 from typing import Any, List
-from .base_strategy import ExtractionStrategy
+from base_strategy import ExtractionStrategy
 
 class ExtractorContext:
     """
