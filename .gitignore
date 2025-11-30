@@ -1,5 +1,7 @@
 # Python.gitignore
 .vscode/
+config.json
+13f_outputs*
 
 
 # Created by https://www.toptal.com/developers/gitignore/api/python
@@ -219,3 +221,5 @@
 *.swp
 *.swo
 *~
+
+
