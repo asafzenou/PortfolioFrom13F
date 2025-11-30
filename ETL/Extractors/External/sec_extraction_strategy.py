@@ -5,9 +5,12 @@ import glob
 import os
 import tempfile
 import shutil
+import re
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+import pandas as pd
+import time
 
+from Extractors.base_strategy import ExtractionStrategy
 from Extractors.base_strategy import ExtractionStrategy
 
 
@@ -67,7 +70,6 @@ class SECExtractionStrategy(ExtractionStrategy):
                     if total_size:
                         pct = (downloaded / total_size) * 100
 
-
             print(f"  ✓ Downloaded: {output_path}")
         except Exception as e:
             print(f"  ✗ Download failed: {e}")
@@ -81,31 +83,38 @@ class SECExtractionStrategy(ExtractionStrategy):
         print(f"  ✓ Extracted to: {extract_to}")
 
     def _parse_tsv_file(self, tsv_file: str) -> List[Dict[str, Any]]:
-        """Parses single TSV file and returns list of holdings."""
+        """Parses single TSV file efficiently using pandas."""
         try:
-            rows = []
-            with open(tsv_file, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f, delimiter="\t")
-                for row in reader:
-                    if row:  # Skip empty rows
-                        rows.append(
-                            {
-                                "cusip": row.get("CUSIP", "").strip(),
-                                "nameOfIssuer": row.get("Name of Issuer", "").strip(),
-                                "value": row.get("Market Value (x$1000)", "").strip(),
-                                "shares": row.get("Shrs or Prin Amt", "").strip(),
-                                "share_type": row.get("Sh/Prn", "").strip(),
-                                "investment_discretion": row.get(
-                                    "Inv. Discretion", ""
-                                ).strip(),
-                                "put_call": row.get("Put/Call", "").strip(),
-                                "voting_sole": row.get("Sole Voting", "").strip(),
-                                "voting_shared": row.get("Shared Voting", "").strip(),
-                                "voting_none": row.get("No Voting", "").strip(),
-                                "tsv_source": tsv_file,
-                            }
-                        )
-            return rows
+            # Read TSV with pandas (much faster than csv.DictReader)
+            df = pd.read_csv(
+                tsv_file,
+                sep="\t",
+                dtype=str,
+                na_filter=False,
+                engine="c",  # Use C parser (faster)
+            )
+
+            # Column mapping
+            column_map = {
+                "CUSIP": "cusip",
+                "Name of Issuer": "nameOfIssuer",
+                "Market Value (x$1000)": "value",
+                "Shrs or Prin Amt": "shares",
+                "Sh/Prn": "share_type",
+                "Inv. Discretion": "investment_discretion",
+                "Put/Call": "put_call",
+                "Sole Voting": "voting_sole",
+                "Shared Voting": "voting_shared",
+                "No Voting": "voting_none",
+            }
+
+            # Rename columns and keep only mapped ones
+            df = df.rename(columns=column_map)
+            # keep_cols = [v for v in column_map.values() if v in df.columns]
+            # df = df[keep_cols]
+
+
+            return df
         except Exception as e:
             print(f"  ⚠ Error parsing {tsv_file}: {e}")
             return []
@@ -113,17 +122,25 @@ class SECExtractionStrategy(ExtractionStrategy):
     def _parse_quarter_folder(self, folder: str, quarter: str) -> List[Dict[str, Any]]:
         """Parses all TSV files in quarter folder recursively."""
         all_rows = []
-        tsv_files = glob.glob(f"{folder}/**/*.tsv", recursive=True)
+        tsv_files_all = glob.glob(f"{folder}/**/*.tsv", recursive=True)
+        pattern = re.compile(r"(?i)^(?:INFOTABLE|SUBMISSION)\.tsv$")
+        tsv_files = [p for p in tsv_files_all if pattern.match(os.path.basename(p))]
         print(f"  Found {len(tsv_files)} TSV files in {quarter}")
 
         for i, tsv_file in enumerate(tsv_files, 1):
             if i % 10 == 0:
                 print(f"    Parsed {i}/{len(tsv_files)} files...")
-            rows = self._parse_tsv_file(tsv_file)
-            all_rows.extend(rows)
 
-        print(f"  ✓ {quarter}: {len(all_rows)} holdings parsed")
-        return all_rows
+            start_time = time.time()
+            df = self._parse_tsv_file(tsv_file)
+            elapsed = time.time() - start_time
+            print(elapsed)
+            all_rows.append(df)
+        infotable = all_rows[0]
+        submission = all_rows[1]
+        final = pd.merge(infotable, submission, how='inner', on='ACCESSION_NUMBER')
+        final = final[final['CIK'] == '0001067983']
+        return final
 
     def extract(self) -> List[Dict[str, Any]]:
         """
@@ -161,14 +178,7 @@ class SECExtractionStrategy(ExtractionStrategy):
                 self._extract_zip(zip_path, extract_dir)
 
                 # Parse
-                rows = self._parse_quarter_folder(extract_dir, quarter)
-
-                # Add quarter metadata
-                for row in rows:
-                    row["quarter"] = quarter
-
-                all_combined_rows.extend(rows)
-                print()
+                df = self._parse_quarter_folder(extract_dir, quarter)
 
             print("=" * 80)
             print(
