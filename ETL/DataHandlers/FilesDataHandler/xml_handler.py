@@ -1,11 +1,10 @@
 import xml.etree.ElementTree as ET
-from dal import AbstractDataHandler
 
-class XMLDataHandler(AbstractDataHandler):
+class XMLDataHandler():
     """Handler for XML data operations"""
     def __init__(self, filepath: str):
         self.filepath = filepath
-    
+
     def read(self) -> ET.Element:
         """Read XML file and return root element"""
         try:
@@ -17,7 +16,7 @@ class XMLDataHandler(AbstractDataHandler):
         except ET.ParseError as e:
             print(f"Error parsing XML file: {e}")
             return None
-    
+
     def write(self, data: ET.Element):
         """Write XML element to file"""
         try:

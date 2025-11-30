@@ -1,13 +1,17 @@
 from typing import Any, List
 from .base_strategy import ExtractionStrategy
-from DataHandlers.DBDataHandler.db_abstract import AbstractDBHandler
 
+class ExtractorContext:
+    """
+    Context that receives a strategy (Extractor)
+    and executes it uniformly.
+    """
 
-class DBExtractionStrategy(ExtractionStrategy):
-    def __init__(self, query: str, db_handler: AbstractDBHandler):
-        self.query = query
-        self.db_handler = db_handler
+    def __init__(self, strategy: ExtractionStrategy):
+        self.strategy = strategy
 
-    def extract(self) -> List[Any]:
-        self.db_handler.connect()
-        return self.db_handler.query(self.query)
+    def set_strategy(self, strategy: ExtractionStrategy):
+        self.strategy = strategy
+
+    def execute(self) -> List[Any]:
+        return self.strategy.extract()

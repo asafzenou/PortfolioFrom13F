@@ -1,9 +1,8 @@
 from abc import abstractmethod
 from typing import Any, List
-from DataHandlers.base_handler import AbstractDataHandler
 
 
-class AbstractDBHandler(AbstractDataHandler):
+class AbstractDBHandler():
 
     @abstractmethod
     def connect(self) -> None:

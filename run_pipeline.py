@@ -1,19 +1,12 @@
-from ETL.etl_pipeline import Pipeline
-from ETL.Extractors.xml_strategy import XMLDataHandler
-from ETL.Transofrm.manipulation import TransformManipulation
-from ETL.Load.load import Load
-from ETL.DataHandlers.FilesDataHandler.csv_handler import CSVDataHandler
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
+"""
+Simple runner script to execute the ETL pipeline main function.
+"""
 
-# הגדר טרנספורמציה
-def transform(record):
-    return record
+import sys
+from ETL.etl_pipeline import main
 
-
-# יצור pipeline
-extractor = XMLDataHandler("input.csv")
-manipulation = TransformManipulation(transform)
-load_handler = Load(CSVDataHandler("output.csv"))
-
-pipeline = Pipeline(extractor, manipulation, load_handler)
-pipeline.run()
+if __name__ == "__main__":
+    sys.exit(main())
