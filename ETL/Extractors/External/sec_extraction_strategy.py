@@ -1,58 +1,130 @@
 import requests
 import zipfile
-import csv
 import glob
 import os
 import tempfile
 import shutil
 import re
+import json
 from typing import List, Dict, Any, Optional
 import pandas as pd
-import time
 
-from Extractors.base_strategy import ExtractionStrategy
 from Extractors.base_strategy import ExtractionStrategy
 
 
 class SECExtractionStrategy(ExtractionStrategy):
     """
     Extracts 13F filings from SEC quarterly dataset ZIPs.
-    Downloads quarterly ZIPs → extracts TSV files → parses → combines records.
-
-    Quarterly datasets from: https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets
-    Example: https://www.sec.gov/files/structureddata/data/form-13f-data-sets/01jun2025-31aug2025_form13f.zip
+    Loads quarterly dataset mappings from JSON configuration.
     """
 
-    # Quarterly dataset mappings (date_range -> zip_filename_pattern)
-    QUARTERLY_DATASETS = {
-        "2025_Q2": "01jun2025-31aug2025_form13f.zip",
-        "2025_Q1": "01mar2025-31may2025_form13f.zip",
-        "2024_Q3": "01sep2024-30nov2024_form13f.zip",
-        "2024_Q2": "01jun2024-31aug2024_form13f.zip",
-        "2024_Q1": "01jan2024-29feb2024_form13f.zip",
-        "2023_Q4": "2023q4_form13f.zip",
-        "2023_Q3": "2023q3_form13f.zip",
-        "2023_Q1": "2023q1_form13f.zip",
-    }
-
     BASE_URL = "https://www.sec.gov/files/structureddata/data/form-13f-data-sets/"
+    INFOTABLE_PATTERN = re.compile(r"(?i)^infotable\.tsv$")
+    SUBMISSION_PATTERN = re.compile(r"(?i)^submission\.tsv$")
 
     def __init__(
         self,
         quarters: Optional[List[str]] = None,
         output_dir: str = "13f_outputs",
+        cik_filter: Optional[str] = None,
+        config_path: str = "data/quarterly_datasets.json",
     ):
         """
         Args:
-            quarters: List of quarters to download (e.g., ["2025_Q2", "2025_Q1"]). If None, downloads all available quarters.
+            quarters: List of quarters to download (e.g., ["2025_Q2", "2025_Q1"]).
             output_dir: Output directory for downloads and parsed data.
+            cik_filter: Optional CIK to filter results (e.g., "0001067983").
+            config_path: Path to quarterly_datasets.json configuration file.
         """
-        self.quarters = quarters or list(self.QUARTERLY_DATASETS.keys())
         self.output_dir = output_dir
+        self.cik_filter = cik_filter
         os.makedirs(self.output_dir, exist_ok=True)
 
+        # Load quarterly datasets from JSON
+        self.quarterly_datasets = self._load_quarterly_datasets(config_path)
+
+        # Set quarters
+        self.quarters = quarters or self._get_all_quarters()
+
+    def _load_quarterly_datasets(self, config_path: str) -> Dict[str, str]:
+        """Load quarterly dataset mappings from JSON file."""
+        try:
+            with open(config_path, "r") as f:
+                data = json.load(f)
+
+            # Flatten nested structure: {"2025": {"Q2": "...", ...}} → {"2025_Q2": "...">
+            flat_dict = {}
+            for year, quarters in data.items():
+                for quarter, filename in quarters.items():
+                    key = f"{year}_{quarter}"
+                    flat_dict[key] = filename
+
+            print(f"✓ Loaded {len(flat_dict)} quarters from {config_path}")
+            return flat_dict
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"Config file not found: {config_path}. "
+                "Please create data/quarterly_datasets.json"
+            )
+        except Exception as e:
+            raise ValueError(f"Error loading config file: {e}")
+
+    def _get_all_quarters(self) -> List[str]:
+        """Get all available quarters from loaded config."""
+        return sorted(self.quarterly_datasets.keys())
+
+    # ==================== MAIN EXTRACTION ====================
+
+    def extract(self) -> pd.DataFrame:
+        """
+        Main extraction flow:
+        1. Validate quarters
+        2. Download all requested quarterly ZIPs
+        3. Extract and parse TSV files
+        4. Merge infotable with submission
+        5. Apply CIK filter if provided
+        6. Combine quarters and return
+        """
+        temp_dir = tempfile.mkdtemp(prefix="sec_13f_quarterly_")
+        all_quarters_data = []
+
+        try:
+            print(f"Extracting {len(self.quarters)} quarters...\n")
+
+            for quarter in self.quarters:
+                if quarter not in self.quarterly_datasets:
+                    print(f"⚠ Unknown quarter: {quarter}, skipping...")
+                    continue
+
+                try:
+                    quarter_df = self._process_quarter(quarter, temp_dir)
+                    all_quarters_data.append(quarter_df)
+                except Exception as e:
+                    print(f"⚠ Failed to process {quarter}: {e}")
+                    continue
+
+            # Combine all quarters
+            if not all_quarters_data:
+                raise ValueError("No quarters processed successfully")
+
+            combined_df = pd.concat(all_quarters_data, ignore_index=True)
+
+            print("=" * 80)
+            print(f"✓ Total holdings extracted: {len(combined_df)}")
+            print(f"✓ Quarters: {', '.join(combined_df['quarter'].unique())}")
+            print("=" * 80)
+
+            return combined_df
+
+        finally:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+                print(f"✓ Cleaned up temp directory")
+
+    # ==================== DOWNLOAD FUNCTIONS ====================
+
     def _download_zip(self, url: str, output_path: str) -> None:
-        """Downloads SEC quarterly ZIP with proper headers."""
+        """Download SEC quarterly ZIP file with streaming and progress tracking."""
         headers = {"User-Agent": "AsafZenou-Research/1.0"}
         print(f"  Downloading from: {url}")
 
@@ -69,125 +141,164 @@ class SECExtractionStrategy(ExtractionStrategy):
                     downloaded += len(chunk)
                     if total_size:
                         pct = (downloaded / total_size) * 100
+                        print(f"    {pct:.1f}% downloaded...")
 
             print(f"  ✓ Downloaded: {output_path}")
         except Exception as e:
             print(f"  ✗ Download failed: {e}")
             raise
 
+    def _ensure_zip_downloaded(self, quarter: str) -> str:
+        """Ensure ZIP file exists; download if missing. Returns path to ZIP."""
+        zip_filename = self.quarterly_datasets[quarter]
+        zip_url = self.BASE_URL + zip_filename
+        zip_path = os.path.join(self.output_dir, zip_filename)
+
+        if not os.path.exists(zip_path):
+            self._download_zip(zip_url, zip_path)
+        else:
+            print(f"  ✓ Already downloaded: {zip_filename}")
+
+        return zip_path
+
+    # ==================== EXTRACTION FUNCTIONS ====================
+
     def _extract_zip(self, zip_path: str, extract_to: str) -> None:
-        """Extracts ZIP to target directory."""
+        """Extract ZIP file to target directory."""
         os.makedirs(extract_to, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(extract_to)
         print(f"  ✓ Extracted to: {extract_to}")
 
-    def _parse_tsv_file(self, tsv_file: str) -> List[Dict[str, Any]]:
-        """Parses single TSV file efficiently using pandas."""
+    # ==================== TSV PARSING FUNCTIONS ====================
+
+    def _rename_tsv_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Rename TSV columns to standardized names."""
+        column_map = {
+            "CUSIP": "cusip",
+            "Name of Issuer": "nameOfIssuer",
+            "Market Value (x$1000)": "value",
+            "Shrs or Prin Amt": "shares",
+            "Sh/Prn": "share_type",
+            "Inv. Discretion": "investment_discretion",
+            "Put/Call": "put_call",
+            "Sole Voting": "voting_sole",
+            "Shared Voting": "voting_shared",
+            "No Voting": "voting_none",
+        }
+        return df.rename(columns=column_map)
+
+    def _read_tsv_file(self, tsv_file: str) -> Optional[pd.DataFrame]:
+        """Read single TSV file using pandas (fast C engine)."""
         try:
-            # Read TSV with pandas (much faster than csv.DictReader)
             df = pd.read_csv(
                 tsv_file,
                 sep="\t",
                 dtype=str,
                 na_filter=False,
-                engine="c",  # Use C parser (faster)
+                engine="c",
             )
-
-            # Column mapping
-            column_map = {
-                "CUSIP": "cusip",
-                "Name of Issuer": "nameOfIssuer",
-                "Market Value (x$1000)": "value",
-                "Shrs or Prin Amt": "shares",
-                "Sh/Prn": "share_type",
-                "Inv. Discretion": "investment_discretion",
-                "Put/Call": "put_call",
-                "Sole Voting": "voting_sole",
-                "Shared Voting": "voting_shared",
-                "No Voting": "voting_none",
-            }
-
-            # Rename columns and keep only mapped ones
-            df = df.rename(columns=column_map)
-            # keep_cols = [v for v in column_map.values() if v in df.columns]
-            # df = df[keep_cols]
-
-
             return df
         except Exception as e:
-            print(f"  ⚠ Error parsing {tsv_file}: {e}")
-            return []
+            print(f"  ⚠ Error reading {tsv_file}: {e}")
+            return None
 
-    def _parse_quarter_folder(self, folder: str, quarter: str) -> List[Dict[str, Any]]:
-        """Parses all TSV files in quarter folder recursively."""
-        all_rows = []
-        tsv_files_all = glob.glob(f"{folder}/**/*.tsv", recursive=True)
-        pattern = re.compile(r"(?i)^(?:INFOTABLE|SUBMISSION)\.tsv$")
-        tsv_files = [p for p in tsv_files_all if pattern.match(os.path.basename(p))]
-        print(f"  Found {len(tsv_files)} TSV files in {quarter}")
+    def _parse_tsv_file(self, tsv_file: str) -> Optional[pd.DataFrame]:
+        """Parse TSV file and rename columns."""
+        df = self._read_tsv_file(tsv_file)
+        if df is None or df.empty:
+            return None
 
+        df = self._rename_tsv_columns(df)
+        return df
+
+    # ==================== FOLDER OPERATIONS ====================
+
+    def _find_tsv_files(self, folder: str, pattern: re.Pattern) -> List[str]:
+        """Find TSV files matching pattern in folder recursively."""
+        all_files = glob.glob(f"{folder}/**/*.tsv", recursive=True)
+        matching_files = [f for f in all_files if pattern.match(os.path.basename(f))]
+        return matching_files
+
+    def _read_specific_tsv_files(
+        self, folder: str, pattern: re.Pattern
+    ) -> List[pd.DataFrame]:
+        """Read all TSV files matching pattern from folder."""
+        tsv_files = self._find_tsv_files(folder, pattern)
+        print(f"  Found {len(tsv_files)} TSV files")
+
+        dataframes = []
         for i, tsv_file in enumerate(tsv_files, 1):
             if i % 10 == 0:
                 print(f"    Parsed {i}/{len(tsv_files)} files...")
 
-            start_time = time.time()
             df = self._parse_tsv_file(tsv_file)
-            elapsed = time.time() - start_time
-            print(elapsed)
-            all_rows.append(df)
-        infotable = all_rows[0]
-        submission = all_rows[1]
-        final = pd.merge(infotable, submission, how='inner', on='ACCESSION_NUMBER')
-        final = final[final['CIK'] == '0001067983']
-        return final
+            if df is not None:
+                dataframes.append(df)
 
-    def extract(self) -> List[Dict[str, Any]]:
-        """
-        Main extraction flow:
-        1. Download all requested quarterly ZIPs
-        2. Extract each to temp directory
-        3. Parse all TSV files per quarter
-        4. Combine all records across quarters
-        5. Return combined dataset
-        """
-        temp_dir = tempfile.mkdtemp(prefix="sec_13f_quarterly_")
-        all_combined_rows = []
+        return dataframes
 
-        try:
-            print(f"Extracting {len(self.quarters)} quarters...\n")
+    # ==================== MERGE OPERATIONS ====================
 
-            for quarter in self.quarters:
-                if quarter not in self.QUARTERLY_DATASETS:
-                    print(f"⚠ Unknown quarter: {quarter}")
-                    continue
+    def _merge_infotable_and_submission(
+        self, info_dfs: List[pd.DataFrame], submission_dfs: List[pd.DataFrame]
+    ) -> pd.DataFrame:
+        """Merge infotable with submission data on ACCESSION_NUMBER."""
+        if not info_dfs or not submission_dfs:
+            raise ValueError("Missing infotable or submission data")
 
-                print(f"Processing {quarter}...")
-                zip_filename = self.QUARTERLY_DATASETS[quarter]
-                zip_url = self.BASE_URL + zip_filename
-                zip_path = os.path.join(self.output_dir, zip_filename)
+        infotable = pd.concat(info_dfs, ignore_index=True)
+        submission = pd.concat(submission_dfs, ignore_index=True)
 
-                # Download
-                if not os.path.exists(zip_path):
-                    self._download_zip(zip_url, zip_path)
-                else:
-                    print(f"  ✓ Already downloaded: {zip_filename}")
+        merged = pd.merge(infotable, submission, how="inner", on="ACCESSION_NUMBER")
+        print(
+            f"  ✓ Merged: {len(infotable)} info rows + {len(submission)} submission rows → {len(merged)} merged rows"
+        )
+        return merged
 
-                # Extract
-                extract_dir = os.path.join(temp_dir, quarter)
-                self._extract_zip(zip_path, extract_dir)
-
-                # Parse
-                df = self._parse_quarter_folder(extract_dir, quarter)
-
-            print("=" * 80)
+    def _apply_cik_filter(self, df: pd.DataFrame, cik: str) -> pd.DataFrame:
+        """Filter dataframe by CIK if provided."""
+        if cik and "CIK" in df.columns:
+            original_count = len(df)
+            df = df[df["CIK"] == cik]
+            filtered_count = len(df)
             print(
-                f"✓ Total holdings parsed across all quarters: {len(all_combined_rows)}"
+                f"  ✓ CIK filter: {original_count} → {filtered_count} rows (CIK: {cik})"
             )
-            print("=" * 80)
+        return df
 
-            return all_combined_rows
+    # ==================== QUARTER PROCESSING ====================
 
-        finally:
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
+    def _process_quarter(self, quarter: str, temp_dir: str) -> pd.DataFrame:
+        """Process single quarter: download, extract, merge, filter."""
+        print(f"Processing {quarter}...")
+
+        # Download if needed
+        zip_path = self._ensure_zip_downloaded(quarter)
+
+        # Extract
+        extract_dir = os.path.join(temp_dir, quarter)
+        self._extract_zip(zip_path, extract_dir)
+
+        # Parse infotable
+        print(f"  Parsing infotable files...")
+        info_dfs = self._read_specific_tsv_files(extract_dir, self.INFOTABLE_PATTERN)
+
+        # Parse submission
+        print(f"  Parsing submission files...")
+        submission_dfs = self._read_specific_tsv_files(
+            extract_dir, self.SUBMISSION_PATTERN
+        )
+
+        # Merge
+        merged_df = self._merge_infotable_and_submission(info_dfs, submission_dfs)
+
+        # Apply CIK filter if provided
+        if self.cik_filter:
+            merged_df = self._apply_cik_filter(merged_df, self.cik_filter)
+
+        # Add quarter metadata
+        merged_df["quarter"] = quarter
+
+        print()
+        return merged_df

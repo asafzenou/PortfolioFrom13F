@@ -25,3 +25,5 @@ def main():
         quarters=["2025_Q2", "2024_Q3"]
     )
     x.extract()
+    y = ''
+    z = ''
