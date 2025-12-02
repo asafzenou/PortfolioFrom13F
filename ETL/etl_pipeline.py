@@ -28,8 +28,9 @@ from logger.logger import ETLLogger
 def main():
     """Main ETL pipeline execution."""
 
-    # Initialize logger
-    logger = ETLLogger(name="ETL_Pipeline")
+    # ==================== INITIALIZATION ====================
+    # Initialize logger with console output enabled
+    logger = ETLLogger(name="ETL_Pipeline", console_output=True)
 
     # ==================== EXTRACT ====================
     logger.info("=" * 80)
