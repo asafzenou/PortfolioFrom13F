@@ -22,8 +22,8 @@ from Extractors.External.sec_extraction_strategy import SECExtractionStrategy
 
 def main():
     x = SECExtractionStrategy(
-        quarters=["2025_Q2", "2024_Q3"]
+        quarters=["2025_Q2"]
     )
-    x.extract()
+    df = x.extract()
     y = ''
     z = ''

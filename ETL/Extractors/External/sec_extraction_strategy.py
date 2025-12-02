@@ -10,6 +10,9 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 
 from Extractors.base_strategy import ExtractionStrategy
+from DAL.dal import DAL
+from DataHandlers.WebDataFetcher import RemoteFileFetcher
+from DataHandlers.DBDataHandler.db_abstract import AbstractDBHandler
 
 
 class SECExtractionStrategy(ExtractionStrategy):
@@ -28,16 +31,11 @@ class SECExtractionStrategy(ExtractionStrategy):
         output_dir: str = "13f_outputs",
         cik_filter: Optional[str] = None,
         config_path: str = "data/quarterly_datasets.json",
+        dal: Optional[DAL] = None,
     ):
-        """
-        Args:
-            quarters: List of quarters to download (e.g., ["2025_Q2", "2025_Q1"]).
-            output_dir: Output directory for downloads and parsed data.
-            cik_filter: Optional CIK to filter results (e.g., "0001067983").
-            config_path: Path to quarterly_datasets.json configuration file.
-        """
         self.output_dir = output_dir
         self.cik_filter = cik_filter
+        self.file_fetcher = RemoteFileFetcher()
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Load quarterly datasets from JSON
@@ -76,15 +74,6 @@ class SECExtractionStrategy(ExtractionStrategy):
     # ==================== MAIN EXTRACTION ====================
 
     def extract(self) -> pd.DataFrame:
-        """
-        Main extraction flow:
-        1. Validate quarters
-        2. Download all requested quarterly ZIPs
-        3. Extract and parse TSV files
-        4. Merge infotable with submission
-        5. Apply CIK filter if provided
-        6. Combine quarters and return
-        """
         temp_dir = tempfile.mkdtemp(prefix="sec_13f_quarterly_")
         all_quarters_data = []
 
@@ -124,24 +113,19 @@ class SECExtractionStrategy(ExtractionStrategy):
     # ==================== DOWNLOAD FUNCTIONS ====================
 
     def _download_zip(self, url: str, output_path: str) -> None:
-        """Download SEC quarterly ZIP file with streaming and progress tracking."""
-        headers = {"User-Agent": "AsafZenou-Research/1.0"}
+        """Download SEC quarterly ZIP file with streaming and progress tracking via DAL."""
         print(f"  Downloading from: {url}")
 
         try:
-            response = requests.get(url, headers=headers, stream=True, timeout=60)
-            response.raise_for_status()
+            response = self.dal.fetch_remote_stream(url)
 
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded = 0
+            def on_progress(written: int, total: int):
+                if total:
+                    pct = (written / total) * 100
+                    print(f"    {pct:.1f}% downloaded...")
 
             with open(output_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size:
-                        pct = (downloaded / total_size) * 100
-                        print(f"    {pct:.1f}% downloaded...")
+                self.file_fetcher.write_chunks_to_file(response, f, on_progress)
 
             print(f"  ✓ Downloaded: {output_path}")
         except Exception as e:
