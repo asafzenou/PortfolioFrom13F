@@ -13,6 +13,7 @@ from extractors.base_strategy import ExtractionStrategy
 from dal.dal import DAL
 from data_handlers.web_data_fetcher import RemoteFileFetcher
 from data_handlers.db_data_handler.db_abstract import AbstractDBHandler
+from logger.logger import ETLLogger
 
 
 class SECExtractionStrategy(ExtractionStrategy):
@@ -32,10 +33,12 @@ class SECExtractionStrategy(ExtractionStrategy):
         cik_filter: Optional[str] = None,
         config_path: str = "data/quarterly_datasets.json",
         dal: Optional[DAL] = None,
+        logger: Optional[ETLLogger] = None,
     ):
         self.output_dir = output_dir
         self.cik_filter = cik_filter
         self.file_fetcher = RemoteFileFetcher()
+        self.logger = logger or ETLLogger(name="SECExtractionStrategy")
         os.makedirs(self.output_dir, exist_ok=True)
 
         # load quarterly datasets from JSON
@@ -57,14 +60,16 @@ class SECExtractionStrategy(ExtractionStrategy):
                     key = f"{year}_{quarter}"
                     flat_dict[key] = filename
 
-            print(f"✓ Loaded {len(flat_dict)} quarters from {config_path}")
+            self.logger.info(f"Loaded {len(flat_dict)} quarters from {config_path}")
             return flat_dict
         except FileNotFoundError:
+            self.logger.error(f"Config file not found: {config_path}")
             raise FileNotFoundError(
                 f"Config file not found: {config_path}. "
                 "Please create data/quarterly_datasets.json"
             )
         except Exception as e:
+            self.logger.error(f"Error loading config file: {e}")
             raise ValueError(f"Error loading config file: {e}")
 
     def _get_all_quarters(self) -> List[str]:
@@ -74,62 +79,64 @@ class SECExtractionStrategy(ExtractionStrategy):
     # ==================== MAIN EXTRACTION ====================
 
     def extract(self) -> pd.DataFrame:
+        """Main extraction orchestration."""
         temp_dir = tempfile.mkdtemp(prefix="sec_13f_quarterly_")
         all_quarters_data = []
 
         try:
-            print(f"Extracting {len(self.quarters)} quarters...\n")
+            self.logger.info(f"Extracting {len(self.quarters)} quarters...")
 
             for quarter in self.quarters:
                 if quarter not in self.quarterly_datasets:
-                    print(f"⚠ Unknown quarter: {quarter}, skipping...")
+                    self.logger.warning(f"Unknown quarter: {quarter}, skipping...")
                     continue
 
                 try:
                     quarter_df = self._process_quarter(quarter, temp_dir)
                     all_quarters_data.append(quarter_df)
                 except Exception as e:
-                    print(f"⚠ Failed to process {quarter}: {e}")
+                    self.logger.error(f"Failed to process {quarter}: {e}")
+                    self.logger.exception(f"Exception details for {quarter}:")
                     continue
 
             # Combine all quarters
             if not all_quarters_data:
+                self.logger.error("No quarters processed successfully")
                 raise ValueError("No quarters processed successfully")
 
             combined_df = pd.concat(all_quarters_data, ignore_index=True)
 
-            print("=" * 80)
-            print(f"✓ Total holdings extracted: {len(combined_df)}")
-            print(f"✓ Quarters: {', '.join(combined_df['quarter'].unique())}")
-            print("=" * 80)
+            self.logger.info(f"Total holdings extracted: {len(combined_df)}")
+            self.logger.info(f"Quarters: {', '.join(combined_df['quarter'].unique())}")
 
             return combined_df
 
         finally:
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
-                print(f"✓ Cleaned up temp directory")
+                self.logger.info("Cleaned up temp directory")
 
     # ==================== DOWNLOAD FUNCTIONS ====================
 
     def _download_zip(self, url: str, output_path: str) -> None:
         """Download SEC quarterly ZIP file with streaming and progress tracking via dal."""
-        print(f"  Downloading from: {url}")
+        self.logger.info(f"Downloading from: {url}")
 
         try:
-            response = self.dal.fetch_remote_stream(url)
+            response = self.file_fetcher.fetch_stream(url)
 
             def on_progress(written: int, total: int):
                 if total:
                     pct = (written / total) * 100
-                    print(f"    {pct:.1f}% downloaded...")
+                    self.logger.debug(f"{pct:.1f}% downloaded...")
 
             with open(output_path, "wb") as f:
                 self.file_fetcher.write_chunks_to_file(response, f, on_progress)
 
-            print(f"  ✓ Downloaded: {output_path}")
+            self.logger.info(f"Downloaded: {output_path}")
         except Exception as e:
-            print(f"  ✗ Download failed: {e}")
+            self.logger.error(f"Download failed: {e}")
+            self.logger.exception("Download error details:")
             raise
 
     def _ensure_zip_downloaded(self, quarter: str) -> str:
@@ -141,7 +148,7 @@ class SECExtractionStrategy(ExtractionStrategy):
         if not os.path.exists(zip_path):
             self._download_zip(zip_url, zip_path)
         else:
-            print(f"  ✓ Already downloaded: {zip_filename}")
+            self.logger.info(f"Already downloaded: {zip_filename}")
 
         return zip_path
 
@@ -152,7 +159,7 @@ class SECExtractionStrategy(ExtractionStrategy):
         os.makedirs(extract_to, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(extract_to)
-        print(f"  ✓ Extracted to: {extract_to}")
+        self.logger.info(f"Extracted to: {extract_to}")
 
     # ==================== TSV PARSING FUNCTIONS ====================
 
@@ -184,7 +191,7 @@ class SECExtractionStrategy(ExtractionStrategy):
             )
             return df
         except Exception as e:
-            print(f"  ⚠ Error reading {tsv_file}: {e}")
+            self.logger.error(f"Error reading {tsv_file}: {e}")
             return None
 
     def _parse_tsv_file(self, tsv_file: str) -> Optional[pd.DataFrame]:
@@ -209,12 +216,12 @@ class SECExtractionStrategy(ExtractionStrategy):
     ) -> List[pd.DataFrame]:
         """Read all TSV files matching pattern from folder."""
         tsv_files = self._find_tsv_files(folder, pattern)
-        print(f"  Found {len(tsv_files)} TSV files")
+        self.logger.info(f"Found {len(tsv_files)} TSV files")
 
         dataframes = []
         for i, tsv_file in enumerate(tsv_files, 1):
             if i % 10 == 0:
-                print(f"    Parsed {i}/{len(tsv_files)} files...")
+                self.logger.debug(f"Parsed {i}/{len(tsv_files)} files...")
 
             df = self._parse_tsv_file(tsv_file)
             if df is not None:
@@ -229,14 +236,15 @@ class SECExtractionStrategy(ExtractionStrategy):
     ) -> pd.DataFrame:
         """Merge infotable with submission data on ACCESSION_NUMBER."""
         if not info_dfs or not submission_dfs:
+            self.logger.error("Missing infotable or submission data")
             raise ValueError("Missing infotable or submission data")
 
         infotable = pd.concat(info_dfs, ignore_index=True)
         submission = pd.concat(submission_dfs, ignore_index=True)
 
         merged = pd.merge(infotable, submission, how="inner", on="ACCESSION_NUMBER")
-        print(
-            f"  ✓ Merged: {len(infotable)} info rows + {len(submission)} submission rows → {len(merged)} merged rows"
+        self.logger.info(
+            f"Merged: {len(infotable)} info rows + {len(submission)} submission rows → {len(merged)} merged rows"
         )
         return merged
 
@@ -246,8 +254,8 @@ class SECExtractionStrategy(ExtractionStrategy):
             original_count = len(df)
             df = df[df["CIK"] == cik]
             filtered_count = len(df)
-            print(
-                f"  ✓ CIK filter: {original_count} → {filtered_count} rows (CIK: {cik})"
+            self.logger.info(
+                f"CIK filter: {original_count} → {filtered_count} rows (CIK: {cik})"
             )
         return df
 
@@ -255,7 +263,7 @@ class SECExtractionStrategy(ExtractionStrategy):
 
     def _process_quarter(self, quarter: str, temp_dir: str) -> pd.DataFrame:
         """Process single quarter: download, extract, merge, filter."""
-        print(f"Processing {quarter}...")
+        self.logger.info(f"Processing {quarter}...")
 
         # Download if needed
         zip_path = self._ensure_zip_downloaded(quarter)
@@ -265,11 +273,11 @@ class SECExtractionStrategy(ExtractionStrategy):
         self._extract_zip(zip_path, extract_dir)
 
         # Parse infotable
-        print(f"  Parsing infotable files...")
+        self.logger.info("Parsing infotable files...")
         info_dfs = self._read_specific_tsv_files(extract_dir, self.INFOTABLE_PATTERN)
 
         # Parse submission
-        print(f"  Parsing submission files...")
+        self.logger.info("Parsing submission files...")
         submission_dfs = self._read_specific_tsv_files(
             extract_dir, self.SUBMISSION_PATTERN
         )
@@ -284,5 +292,4 @@ class SECExtractionStrategy(ExtractionStrategy):
         # Add quarter metadata
         merged_df["quarter"] = quarter
 
-        print()
         return merged_df
