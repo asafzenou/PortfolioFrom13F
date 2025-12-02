@@ -243,9 +243,7 @@ class SECExtractionStrategy(ExtractionStrategy):
         submission = pd.concat(submission_dfs, ignore_index=True)
 
         merged = pd.merge(infotable, submission, how="inner", on="ACCESSION_NUMBER")
-        self.logger.info(
-            f"Merged: {len(infotable)} info rows + {len(submission)} submission rows → {len(merged)} merged rows"
-        )
+
         return merged
 
     def _apply_cik_filter(self, df: pd.DataFrame, cik: str) -> pd.DataFrame:
