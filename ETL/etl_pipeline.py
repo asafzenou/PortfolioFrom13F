@@ -19,10 +19,10 @@ Usage examples:
 
 import os
 import pandas as pd
-from Extractors.External.sec_extraction_strategy import SECExtractionStrategy
-from Manipulation.manipulation import DataManipulation
-from Load.load import DataLoader
-from Logging.logger import ETLLogger
+from extractors.external.sec_extraction_strategy import SECExtractionStrategy
+from manipulation.manipulation import DataManipulation
+from load.load import DataLoader
+from logger.logger import ETLLogger
 
 
 def main():
@@ -60,10 +60,10 @@ def main():
             df, operations=["clean", "standardize", "compute", "sort"]
         )
 
-        logger.info(f"Manipulation complete: {len(df)} records")
+        logger.info(f"manipulation complete: {len(df)} records")
     except Exception as e:
-        logger.error(f"Manipulation failed: {str(e)}")
-        logger.exception("Manipulation error details:")
+        logger.error(f"manipulation failed: {str(e)}")
+        logger.exception("manipulation error details:")
         return 1
 
     # ==================== LOAD ====================
@@ -79,10 +79,10 @@ def main():
         loader.load(df, "portfolio_13f", formats=["csv", "excel"])
         loader.save_summary_report(df, "portfolio_13f")
 
-        logger.info("Load complete: files saved successfully")
+        logger.info("load complete: files saved successfully")
     except Exception as e:
-        logger.error(f"Load failed: {str(e)}")
-        logger.exception("Load error details:")
+        logger.error(f"load failed: {str(e)}")
+        logger.exception("load error details:")
         return 1
 
     # ==================== COMPLETION ====================

@@ -1,5 +1,5 @@
-from DataHandlers.DBDataHandler.db_abstract import AbstractDBHandler
-from DataHandlers.WebDataFetcher import RemoteFileFetcher
+from data_handlers.db_data_handler.db_abstract import AbstractDBHandler
+from data_handlers.web_data_fetcher import RemoteFileFetcher
 
 
 class DAL:

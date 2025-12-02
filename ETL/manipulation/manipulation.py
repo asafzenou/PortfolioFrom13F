@@ -1,6 +1,6 @@
 import pandas as pd
 from typing import Optional, List
-from Logging.logger import ETLLogger
+from logger.logger import ETLLogger
 
 
 class DataManipulation:

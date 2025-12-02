@@ -9,10 +9,10 @@ import json
 from typing import List, Dict, Any, Optional
 import pandas as pd
 
-from Extractors.base_strategy import ExtractionStrategy
-from DAL.dal import DAL
-from DataHandlers.WebDataFetcher import RemoteFileFetcher
-from DataHandlers.DBDataHandler.db_abstract import AbstractDBHandler
+from extractors.base_strategy import ExtractionStrategy
+from dal.dal import DAL
+from data_handlers.web_data_fetcher import RemoteFileFetcher
+from data_handlers.db_data_handler.db_abstract import AbstractDBHandler
 
 
 class SECExtractionStrategy(ExtractionStrategy):
@@ -38,14 +38,14 @@ class SECExtractionStrategy(ExtractionStrategy):
         self.file_fetcher = RemoteFileFetcher()
         os.makedirs(self.output_dir, exist_ok=True)
 
-        # Load quarterly datasets from JSON
+        # load quarterly datasets from JSON
         self.quarterly_datasets = self._load_quarterly_datasets(config_path)
 
         # Set quarters
         self.quarters = quarters or self._get_all_quarters()
 
     def _load_quarterly_datasets(self, config_path: str) -> Dict[str, str]:
-        """Load quarterly dataset mappings from JSON file."""
+        """load quarterly dataset mappings from JSON file."""
         try:
             with open(config_path, "r") as f:
                 data = json.load(f)
@@ -113,7 +113,7 @@ class SECExtractionStrategy(ExtractionStrategy):
     # ==================== DOWNLOAD FUNCTIONS ====================
 
     def _download_zip(self, url: str, output_path: str) -> None:
-        """Download SEC quarterly ZIP file with streaming and progress tracking via DAL."""
+        """Download SEC quarterly ZIP file with streaming and progress tracking via dal."""
         print(f"  Downloading from: {url}")
 
         try:

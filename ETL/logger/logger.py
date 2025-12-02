@@ -5,7 +5,7 @@ from typing import Optional
 
 
 class ETLLogger:
-    """Centralized logging handler for ETL pipeline."""
+    """Centralized logger handler for ETL pipeline."""
 
     LOG_DIR = "logs"
     LOG_LEVEL = logging.INFO
@@ -38,7 +38,7 @@ class ETLLogger:
         self._setup_file_handler(formatter)
 
     def _setup_file_handler(self, formatter: logging.Formatter) -> None:
-        """Setup file handler for logging to file."""
+        """Setup file handler for logger to file."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = os.path.join(self.log_dir, f"etl_pipeline_{timestamp}.log")
 

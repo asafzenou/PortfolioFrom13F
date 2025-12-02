@@ -1,6 +1,6 @@
 import sqlite3
 from typing import Any, List
-from DataHandlers.DBDataHandler.db_abstract import AbstractDBHandler
+from data_handlers.db_data_handler.db_abstract import AbstractDBHandler
 
 
 class SQLDBHandler(AbstractDBHandler):

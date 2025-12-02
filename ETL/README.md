@@ -86,14 +86,16 @@ from ETLPipeline import Pipeline
 from ETL.extractor import DatabaseExtractor
 from ETL.manipulation import FilterManipulation
 from ETL.load import CSVLoad
-from ETL.DataHandlers.DBDataHandler.db_handler import DBHandler
+from ETL.data_handlers.db_data_handler.db_handler import DBHandler
 
 # Create database handler
 db_handler = DBHandler('localhost', 5432, 'mydb', 'user', 'password')
 
+
 # Define filter criteria
 def filter_criteria(record):
     return record.get('value', 0) > 1000
+
 
 # Create pipeline
 extractor = DatabaseExtractor('SELECT * FROM portfolio', db_handler)
