@@ -13,3 +13,4 @@ lxml>=4.9.0
 edgartools>=4.21.0
 html5lib>=1.1
 openpyxl>=3.0.0
+pyarrow>=12.0.0
